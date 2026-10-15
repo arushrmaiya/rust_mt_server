@@ -4,7 +4,7 @@ use std::{
 
 pub struct ThreadPool{
     jobs: Vec<Worker>,
-    sender: mpsc::Sender<Job>
+    sender: Option<mpsc::Sender<Job>>
 }
 
 struct Worker{
@@ -19,9 +19,21 @@ impl Worker{
         println!("Start {reciever:?}");
         let thread = thread::spawn(move||{
             loop{
-                let job = reciever.lock().unwrap().recv().unwrap();
-                println!("Executing Job {id}");
-                job();
+                // let job = reciever.lock().unwrap().recv().unwrap();
+                // println!("Executing Job {id}");
+                // job();
+
+                let msg = reciever.lock().unwrap().recv();
+                match msg{
+                    Ok(job)=>{
+                        println!("Executing Job {id}");
+                        job();
+                    }
+                    Err(_)=>{
+                        println!("Worker {id} disconnected; shutting down.");
+                        break;
+                    }
+                }
             };});
         Self{id, thread}
     }
@@ -36,7 +48,7 @@ impl ThreadPool{
         for i in 0..size{
             workers.push(Worker::new(i, Arc::clone(&rx)));
         }
-        Self{jobs: workers, sender: tx}
+        Self{jobs: workers, sender: Some(tx)}
     }
 
     pub fn execute<F>(&self, f: F)
@@ -44,13 +56,14 @@ impl ThreadPool{
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        self.sender.send(job).unwrap();
+        self.sender.as_ref().unwrap().send(job).unwrap();
     }
 
 }
 
 impl Drop for ThreadPool{
     fn drop(&mut self){
+        drop(self.sender.take());
         for job in self.jobs.drain(..) {
             println!("Shutting down worker {}", job.id);
             job.thread.join().unwrap();
